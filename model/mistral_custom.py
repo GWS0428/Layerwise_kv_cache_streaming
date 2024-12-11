@@ -126,7 +126,7 @@ class MistralModel_custom(MistralModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
-        # 2. retrieve kv cache
+        # 2. retrieve kv cache (shape: [num_layers, ...])
         return_legacy_cache = False
         if use_cache and not isinstance(past_key_values, Cache):
             past_key_values = DynamicCache.from_legacy_cache(past_key_values)
@@ -177,12 +177,17 @@ class MistralModel_custom(MistralModel):
         self,
         idx: int, # custom argument - layer index
         previous_outputs: CustomModelOutput, # custom argument - previous outputs
+        past_key_values_layer: Optional[Union[Cache, List[torch.FloatTensor]]] = None, # custom argument - past key values
     ) -> CustomModelOutput:
         # extract previous outputs
         input_ids = previous_outputs.input_ids
         attention_mask = previous_outputs.attention_mask
         position_ids = previous_outputs.position_ids
         past_key_values = previous_outputs.past_key_values
+        # update past key values
+        if idx != 0:
+            key_states, value_states = past_key_values_layer[0] # shape: [1, ...]
+            past_key_values.update(key_states, value_states, idx)
         inputs_embeds = previous_outputs.inputs_embeds
         labels = previous_outputs.labels
         use_cache = previous_outputs.use_cache
@@ -303,12 +308,6 @@ class MistralModel_custom(MistralModel):
             labels=labels,
             return_dict=return_dict,
         )
-        # return BaseModelOutputWithPast(
-        #     last_hidden_state=hidden_states,
-        #     past_key_values=next_cache,
-        #     hidden_states=all_hidden_states,
-        #     attentions=all_self_attns,
-        # )
         
 
 class MistralForCausalLM_custom(MistralForCausalLM):
@@ -365,12 +364,14 @@ class MistralForCausalLM_custom(MistralForCausalLM):
         self,
         idx: int, # custom argument - layer index
         previous_outputs: CustomModelOutput, # custom argument - previous outputs
+        past_key_values_layer: Optional[Union[Cache, List[torch.FloatTensor]]] = None, # custom argument - past key values
     ) -> CustomModelOutput:
         
         # 2. decoder layers
         outputs = self.model.forward_layers(
             idx=idx,
             previous_outputs=previous_outputs,
+            past_key_values_layer=past_key_values_layer,
         )
         
         return outputs
