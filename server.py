@@ -1,25 +1,57 @@
-from flask import Flask, request, send_file, abort
+import socket
 import os
+import struct
 
-app = Flask(__name__)
-
+HOST = '127.0.0.1'
+PORT = 50007
 ENCODED_DIR = "/encoded"
 num_layers = 32
 
-@app.route("/get_kv_cache", methods=["GET"])
-def get_kv_cache():
-    doc_id = request.args.get("doc_id")
+def send_all(sock, data: bytes):
+    total_sent = 0
+    while total_sent < len(data):
+        sent = sock.send(data[total_sent:])
+        if sent == 0:
+            raise RuntimeError("Socket connection broken")
+        total_sent += sent
 
-    if doc_id is None:
-        abort(400, description="doc_id parameter is required.")
+def main():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((HOST, PORT))
+        s.listen(1)
+        print(f"Server listening on {HOST}:{PORT}")
 
-    for l in range(num_layers):
-        file_path = os.path.join(ENCODED_DIR, f"{doc_id}_layer_{l}.pkl")
+        conn, addr = s.accept()
+        with conn:
+            print("Connected by", addr)
 
-        if not os.path.exists(file_path):
-            abort(404, description="File not found")
+            doc_id_data = conn.recv(8)
+            if len(doc_id_data) < 8:
+                print("Did not receive doc_id properly.")
+                return
+            doc_id = struct.unpack('>Q', doc_id_data)[0]  # unsigned long long big-endian
 
-        return send_file(file_path, mimetype='application/octet-stream')
+            for layer in range(num_layers):
+                file_path = os.path.join(ENCODED_DIR, f"{doc_id}_layer_{layer}.pkl")
+                if not os.path.exists(file_path):
+                    print(f"File not found: {file_path}")
+                    return
+
+            send_all(conn, struct.pack('>Q', num_layers))
+
+            for layer in range(num_layers):
+                file_name = f"{doc_id}_layer_{layer}.pkl".encode('utf-8')
+                file_path = os.path.join(ENCODED_DIR, f"{doc_id}_layer_{layer}.pkl")
+
+                send_all(conn, struct.pack('>Q', len(file_name)))
+                send_all(conn, file_name)
+
+                with open(file_path, "rb") as f:
+                    content = f.read()
+                send_all(conn, struct.pack('>Q', len(content)))
+                send_all(conn, content)
+
+            print("All layers sent.")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    main()
