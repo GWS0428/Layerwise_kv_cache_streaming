@@ -30,6 +30,26 @@ p.add_argument("--calculate_metric", type=int)
 
 args = p.parse_args()
 
+###
+import socket
+import struct
+import queue
+import pickle
+
+HOST = '127.0.0.1'
+PORT = 50007
+doc_id = 0
+layer_queue = queue.Queue()
+
+def recv_all(sock, length: int) -> bytes:
+    data = b''
+    while len(data) < length:
+        chunk = sock.recv(length - len(data))
+        if not chunk:
+            raise RuntimeError("Socket connection broken")
+        data += chunk
+    return data
+###
 
 if __name__ == "__main__":
     # Check if encoded_dir is exists
@@ -56,9 +76,9 @@ if __name__ == "__main__":
         bytes = cachegen_serializer.to_bytes(key_value)
         pickle.dump(bytes, open(f"{args.encoded_dir}/{doc_id}.pkl", "wb"))
         kv_tokens += [key_value.shape[-2]]
-        # Averaging the size of KV cache 
+        # Averaging the size of KV cache
         avg_size += [len(bytes)/1e6]
-    # Start inferencing 
+    # Start inferencing
     decoded_kvs = []
     average_acc = []
     for doc_id in range(args.start, args.end):
@@ -67,11 +87,43 @@ if __name__ == "__main__":
         lmcache_config = LMCacheEngineConfig.from_defaults(chunk_size=kv_tokens[doc_id])
         meta_data = LMCacheEngineMetadata(model_name=args.model_id, fmt="huggingface", world_size=1, worker_id=0)
         deserializer = CacheGenDeserializer(lmcache_config, meta_data)
-        bytes = pickle.load(open(f"{args.encoded_dir}/{doc_id}.pkl", "rb"))
-        decoded_kv = deserializer.from_bytes(bytes)
+
+        ### get from server ###
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((HOST, PORT))
+            print("Connected to server.")
+
+            s.sendall(struct.pack('>Q', doc_id))
+
+            layer_count_data = recv_all(s, 8)
+            layer_count = struct.unpack('>Q', layer_count_data)[0]
+            print(f"Expecting {layer_count} layers.")
+
+            for i in range(layer_count):
+                fname_len_data = recv_all(s, 8)
+                fname_len = struct.unpack('>Q', fname_len_data)[0]
+
+                fname_data = recv_all(s, fname_len)
+                fname = fname_data.decode('utf-8')
+
+                fcontent_len_data = recv_all(s, 8)
+                fcontent_len = struct.unpack('>Q', fcontent_len_data)[0]
+
+                fcontent = recv_all(s, fcontent_len)
+
+                obj = pickle.loads(fcontent)
+                layer_queue.put((fname, obj))
+                print(f"Received and processed {fname}")
+
+            print("All layers received.")
+        while not layer_queue.empty():
+            fname, obj = layer_queue.get()
+        ### get from server ###
+        #bytes = pickle.load(open(f"{args.encoded_dir}/{doc_id}.pkl", "rb"))
+        decoded_kv = deserializer.from_bytes(obj)
         decoded_kvs += [decoded_kv.cpu()]
-        
-        
+
+
     model, tokenizer = define_model_and_tokenizer(args.model_id, num_gpus=args.num_gpus, max_gpu_memory=args.max_gpu_memory)
     for doc_id in range(args.start, args.end):
         decoded_kv = decoded_kvs[doc_id].cuda()
