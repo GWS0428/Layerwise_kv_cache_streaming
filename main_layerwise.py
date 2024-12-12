@@ -71,62 +71,58 @@ def to_blob(kv_tuples):
     return torch.stack([torch.stack(inner_tuple, dim=0).to("cuda:0") for inner_tuple in kv_tuples], dim=0)
 
 
-p = argparse.ArgumentParser()
-
-# p.add_argument("--model_id", type = str, default = "lmsys/longchat-7b-16k")
-p.add_argument("--model_id", type = str, default = "mistral-community/Mistral-7B-v0.2")
-p.add_argument("--save_dir", type=str, default = None)
-p.add_argument("--num_gpus", type=int, default = 1)
-p.add_argument("--max_gpu_memory", type=int, default=48, help="Default max GPU memory in GiB on A40")
-p.add_argument("--path_to_context", type=str, help="The directory where the contexts are stored. ")
-p.add_argument("--start", type=int, default = 0)
-p.add_argument("--end", type=int, default = 1)
-p.add_argument("--dataset_name", type=str)
-args = p.parse_args()
-
-
 if __name__ == "__main__":
+    # arguments
+    doc_id = 0
+    dataset_name = "longchat"
+    model_id = "mistral-community/Mistral-7B-v0.2"
+    model_name = "mistral7b"
+    save_dir = f"./{model_name}_{dataset_name}_data"
+    encoded_dir = "./encoded"
+    num_gpus = 1
+    max_gpu_memory = 48
+    
     # Check if save_dir exists
-    if not os.path.exists(args.save_dir):
-        os.makedirs(args.save_dir, exist_ok=True)
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
         
     # Load model and tokenizer
-    model, tokenizer = define_model_and_tokenizer(args.model_id, num_gpus=args.num_gpus, max_gpu_memory=args.max_gpu_memory)
+    model, tokenizer = define_model_and_tokenizer(model_id, num_gpus=num_gpus, max_gpu_memory=max_gpu_memory)
     print("Model and tokenizer loaded")
     
     # Load data
-    data = load_testcases(DATASET_TO_PATH[args.dataset_name])
-    for doc_id in range(args.start, args.end):
-        print("Saving KV cache for doc: ", doc_id)
-        text = data[doc_id]['prompt']
-        input_ids = tokenizer(text, return_tensors="pt").input_ids.cuda()
-        st = time.monotonic()
-        
-        generated = model.generate(input_ids, max_new_tokens = 1, return_dict_in_generate=True)
-        torch.cuda.synchronize()
-        # print( f"TTFT: {time.monotonic() - st}" )
-        
-        # Extract key-value cache
-        kv = generated['past_key_values']
-        kv = list(kv)
+    data = load_testcases(DATASET_TO_PATH[dataset_name])
+    
+    print("Saving KV cache in layerwise manner for doc: ", doc_id)
+    text = data[doc_id]['prompt']
+    input_ids = tokenizer(text, return_tensors="pt").input_ids.cuda()
+    st = time.monotonic()
+    
+    generated = model.generate(input_ids, max_new_tokens = 1, return_dict_in_generate=True)
+    torch.cuda.synchronize()
+    # print( f"TTFT: {time.monotonic() - st}" )
+    
+    # Extract key-value cache
+    kv = generated['past_key_values']
+    kv = list(kv)
 
-        # TODO: Understand what this code does
-        for i in range(len(kv)):
-            kv[i] = list(kv[i])
-            kv[i][0] = kv[i][0][:, :, :-1][0]
-            kv[i][1] = kv[i][1][:, :, :-1][0]
-            kv[i] = tuple(kv[i])
-        kv = tuple(kv)
-        
-        # Convert layerwise key-value cache to single tensor
-        kv_tensor_list = []
-        for i in range(model.config.num_hidden_layers):
-            # kv_tensor = to_blob(kv)
-            kv_tensor = to_blob((kv[i],))
-            kv_tensor_list.append(kv_tensor)
-        
-        # Save layerwise key-value cache (first file is saved as pkl)
-        for i in range(model.config.num_hidden_layers):
-            torch.save(kv_tensor_list[i], f"{args.save_dir}/raw_kv_{doc_id}_layer_{i}.pt")
-            if doc_id == 0:
-                pickle.dump(kv, open(f"{args.save_dir}/raw_kv_{doc_id}_layer_{i}.pkl", "wb"))
+    # TODO: Understand what this code does
+    for i in range(len(kv)):
+        kv[i] = list(kv[i])
+        kv[i][0] = kv[i][0][:, :, :-1][0]
+        kv[i][1] = kv[i][1][:, :, :-1][0]
+        kv[i] = tuple(kv[i])
+    kv = tuple(kv)
+    
+    # Convert layerwise key-value cache to single tensor
+    kv_tensor_list = []
+    for i in range(model.config.num_hidden_layers):
+        # kv_tensor = to_blob(kv)
+        kv_tensor = to_blob((kv[i],))
+        kv_tensor_list.append(kv_tensor)
+    
+    # Save layerwise key-value cache (first file is saved as pkl)
+    for i in range(model.config.num_hidden_layers):
+        torch.save(kv_tensor_list[i], f"{save_dir}/raw_kv_{doc_id}_layer_{i}.pt")
+        if doc_id == 0:
+            pickle.dump(kv_tensor_list[i], open(f"{save_dir}/raw_kv_{doc_id}_layer_{i}.pkl", "wb"))
