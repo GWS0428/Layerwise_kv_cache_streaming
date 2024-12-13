@@ -1,12 +1,16 @@
-import socket
 import os
 import struct
+import socket
 
-HOST = '127.0.0.1'
+
+# Constants
+HOST = '0.0.0.0'  # Allow connections from any client
 PORT = 50007
-ENCODED_DIR = "/encoded"
+ENCODED_DIR = os.path.join(os.getcwd(), "encoded")
 num_layers = 32
 
+
+# send_all: Sends all bytes to the socket
 def send_all(sock, data: bytes):
     total_sent = 0
     while total_sent < len(data):
@@ -14,6 +18,7 @@ def send_all(sock, data: bytes):
         if sent == 0:
             raise RuntimeError("Socket connection broken")
         total_sent += sent
+
 
 def main():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -52,6 +57,7 @@ def main():
                 send_all(conn, content)
 
             print("All layers sent.")
+
 
 if __name__ == "__main__":
     main()
