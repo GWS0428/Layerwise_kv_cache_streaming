@@ -72,13 +72,17 @@ def to_blob(kv_tuples):
 
 
 if __name__ == "__main__":
+    # Get project root directory
+    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    project_dir = os.path.dirname(current_file_dir)  # parent of utils/
+    
     # arguments
     doc_id = 0
     dataset_name = "longchat"
     model_id = "mistral-community/Mistral-7B-v0.2"
     model_name = "mistral7b"
-    save_dir = f"./{model_name}_{dataset_name}_data"
-    encoded_dir = "./encoded"
+    save_dir = os.path.join(project_dir, "kv_cache", f"{model_name}_{dataset_name}_data")
+    encoded_dir = os.path.join(project_dir, "encoded")
     num_gpus = 1
     max_gpu_memory = 48
     
